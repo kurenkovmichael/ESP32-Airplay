@@ -111,6 +111,7 @@ nav:
       - boards/index.md
       - ESP32-S3 + PCM5102A: boards/esp32s3-pcm5102a.md
       - SqueezeAMP: boards/squeezeamp.md
+      - ESP32-WROVER + ADAU1701: boards/esp32wrover-adau1701.md
       - Esparagus Audio Brick: boards/esparagus-audio-brick.md
       - Esparagus Audio Brick Dual: boards/esparagus-audio-brick-dual-dac.md
       - HiFi-ESP32: boards/hifi-esp32.md

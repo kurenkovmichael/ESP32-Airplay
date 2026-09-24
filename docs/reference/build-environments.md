@@ -11,6 +11,7 @@ Every PlatformIO environment defined in `platformio.ini`. The default is `esp32s
 | `waveshare-esp32s3` | ESP32-S3 | 16 MB | Waveshare ESP32-S3 pin arrangement |
 | `esp32c5-xiao` | ESP32-C5 | 8 MB | Seeed XIAO, needs the community pioarduino platform |
 | `esp32wrover-dev` | ESP32 | 4 MB | Freenove WROVER, includes Bluetooth |
+| `esp32wrover-adau1701` | ESP32 | 16 MB | ESP32-WROVER N16R8 with an ADAU1701 clock master |
 
 ## Amplifier boards
 
@@ -93,7 +94,8 @@ idf.py -DSDKCONFIG_DEFAULTS="config/sdkconfig.defaults;config/sdkconfig.defaults
 CI builds a subset of environments and attaches them to each release. These are the ones
 available in the [browser installer](../getting-started/flashing.md):
 
-`esp32s3`, `waveshare-esp32s3`, `esp32s2`, `squeezeamp-bt`, `squeezeamp-4m`, `smartamp`,
+`esp32s3`, `waveshare-esp32s3`, `esp32s2`, `squeezeamp-bt`, `squeezeamp-4m`,
+`esp32wrover-adau1701`, `smartamp`,
 `esparagus-audio-brick-bt`, `esparagus-audio-brick-s3`, `esparagus-audio-brick-dual-dac`,
 `esparagus-audio-brick-dual-uac`, `esparagus-louder-bt`, `esparagus-louder-s3`,
 `esparagus-echo`, `hifi-esp32-bt`, `hifi-esp32-plus-bt`, `hifi-esparagus-bt`,
