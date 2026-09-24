@@ -49,8 +49,19 @@
 //   I2S_DMA_DESC_NUM × I2S_DMA_FRAME_NUM
 // which at OUTPUT_RATE gives the hardware pipeline delay in µs.
 // Keep these in sync with the i2s_chan_config_t initialisation below.
-#define I2S_DMA_DESC_NUM  8
+#define I2S_DMA_DESC_NUM 8
+
+#ifdef CONFIG_I2S_OUTPUT_ROLE_SLAVE
+// Match one DMA descriptor to one decoded AirPlay frame. Splitting a
+// 352-frame write across descriptors makes an externally clocked writer wait
+// for multiple descriptor recycle events.
+#define I2S_DMA_FRAME_NUM FRAME_SAMPLES
+#define I2S_DMA_RING_US \
+  (((uint64_t)I2S_DMA_DESC_NUM * I2S_DMA_FRAME_NUM * 1000000ULL) / OUTPUT_RATE)
+#define I2S_WRITE_WARNING_US (I2S_DMA_RING_US + 20000ULL)
+#else
 #define I2S_DMA_FRAME_NUM 256
+#endif
 
 // Sample words on the I2S line. 16-bit words are made in place in the
 // source's buffer; 32-bit ones carry the EQ and the volume to the DAC
@@ -75,8 +86,8 @@
 #endif
 
 static i2s_chan_handle_t tx_handle;
-// OUTPUT_RATE is only the boot/idle rate: the clock is retuned to follow
-// whichever source is active, so AirPlay and UAC each run native.
+// In master mode OUTPUT_RATE is only the boot/idle rate: the clock follows
+// the active source. Slave mode keeps the external clock rate fixed.
 static volatile uint32_t s_output_rate = OUTPUT_RATE;
 static volatile uint32_t s_pending_output_rate = 0;
 static volatile bool flush_requested = false;
@@ -174,6 +185,54 @@ static void push_channel_mode_to_dsp(audio_channel_mode_t mode) {
 #else
   (void)mode;
 #endif
+}
+
+#ifdef CONFIG_I2S_OUTPUT_ROLE_SLAVE
+// A slave writer may wait for a full DMA-ring recycle while the external
+// master keeps consuming descriptors. Rate-limit warnings for waits that
+// exceed that interval so diagnostics cannot worsen a timing problem.
+static void diagnose_i2s_write(esp_err_t err, size_t written, size_t bytes,
+                               size_t frames, int64_t elapsed_us) {
+  static int64_t last_warning_us;
+  static uint32_t slow_writes;
+
+  if ((uint64_t)elapsed_us > I2S_WRITE_WARNING_US || err != ESP_OK ||
+      written != bytes) {
+    slow_writes++;
+    int64_t now_us = esp_timer_get_time();
+    if (err != ESP_OK || written != bytes ||
+        now_us - last_warning_us >= 1000000) {
+      ESP_LOGW(TAG,
+               "I2S write delayed: %lld us, frames=%u, bytes=%u/%u, "
+               "err=%s, count=%" PRIu32,
+               (long long)elapsed_us, (unsigned int)frames,
+               (unsigned int)written, (unsigned int)bytes, esp_err_to_name(err),
+               slow_writes);
+      last_warning_us = now_us;
+    }
+  }
+}
+#endif
+
+static esp_err_t write_playback_i2s(const void *data, size_t bytes,
+                                    size_t frames) {
+  size_t written = 0;
+#ifdef CONFIG_I2S_OUTPUT_ROLE_SLAVE
+  int64_t started_us = esp_timer_get_time();
+#endif
+  esp_err_t err =
+      i2s_channel_write(tx_handle, data, bytes, &written, portMAX_DELAY);
+#ifdef CONFIG_I2S_OUTPUT_ROLE_SLAVE
+  diagnose_i2s_write(err, written, bytes, frames,
+                     esp_timer_get_time() - started_us);
+#else
+  (void)frames;
+#endif
+  if (err == ESP_OK) {
+    __atomic_add_fetch(&output_submitted_frames,
+                       (uint64_t)(written / OUT_FRAME_BYTES), __ATOMIC_RELAXED);
+  }
+  return err;
 }
 
 #ifndef CONFIG_DAC_CONTROLS_VOLUME
@@ -380,7 +439,6 @@ static void playback_task(void *arg) {
     return;
   }
 
-  size_t written;
   while (playback_running) {
     // Retuning touches the I2S channel, so it has to happen here between
     // writes rather than in the caller's context.
@@ -417,13 +475,10 @@ static void playback_task(void *arg) {
       const void *words =
           process_pcm(play_buf, play_samples, airplay_get_volume_q15(), &out);
       feed_led(words, play_samples);
-      if (i2s_channel_write(tx_handle, words, play_samples * OUT_FRAME_BYTES,
-                            &written, portMAX_DELAY) == ESP_OK) {
-        __atomic_add_fetch(&output_submitted_frames,
-                           (uint64_t)(written / OUT_FRAME_BYTES),
-                           __ATOMIC_RELAXED);
-      }
+      write_playback_i2s(words, play_samples * OUT_FRAME_BYTES, play_samples);
+#ifndef CONFIG_I2S_OUTPUT_ROLE_SLAVE
       taskYIELD();
+#endif
     } else {
       // Receiver underflow — output a frame of silence.  Block on the DMA
       // write (portMAX_DELAY) so the write itself paces the loop, instead of a
@@ -435,13 +490,8 @@ static void playback_task(void *arg) {
       const void *words =
           process_pcm(pcm, FRAME_SAMPLES, airplay_get_volume_q15(), &out);
       feed_led(words, FRAME_SAMPLES);
-      if (i2s_channel_write(tx_handle, words,
-                            (size_t)FRAME_SAMPLES * OUT_FRAME_BYTES, &written,
-                            portMAX_DELAY) == ESP_OK) {
-        __atomic_add_fetch(&output_submitted_frames,
-                           (uint64_t)(written / OUT_FRAME_BYTES),
-                           __ATOMIC_RELAXED);
-      }
+      write_playback_i2s(words, (size_t)FRAME_SAMPLES * OUT_FRAME_BYTES,
+                         FRAME_SAMPLES);
     }
   }
 
@@ -469,12 +519,17 @@ esp_err_t audio_output_init(void) {
   }
   push_channel_mode_to_dsp(channel_mode);
 
-  i2s_chan_config_t chan_cfg =
-      I2S_CHANNEL_DEFAULT_CONFIG(I2S_NUM_0, I2S_ROLE_MASTER);
+  i2s_chan_config_t chan_cfg = I2S_CHANNEL_DEFAULT_CONFIG(I2S_NUM_0,
+#ifdef CONFIG_I2S_OUTPUT_ROLE_SLAVE
+                                                          I2S_ROLE_SLAVE
+#else
+                                                          I2S_ROLE_MASTER
+#endif
+  );
   chan_cfg.dma_desc_num = I2S_DMA_DESC_NUM;
   chan_cfg.dma_frame_num = I2S_DMA_FRAME_NUM;
   // Zero each DMA descriptor after it is sent.  Without this, a writer
-  // stall longer than the DMA ring (~46 ms — e.g. an NVS/flash write
+  // stall longer than the DMA ring (e.g. an NVS/flash write
   // disabling the cache, or a CPU burst from the web server) makes the
   // hardware REPLAY the stale ring contents in a loop: a loud stutter, then
   // a second discontinuity on recovery.  With auto_clear an underrun
@@ -527,10 +582,15 @@ esp_err_t audio_output_init(void) {
   ESP_RETURN_ON_ERROR(i2s_channel_enable(tx_handle), TAG,
                       "channel enable failed");
   ESP_LOGI(TAG,
-           "I2S initialized: Rate=%u, %u-bit words, DMA_Desc=%d, "
-           "DMA_Frame=%d",
+           "I2S initialized: Role=%s, Rate=%u, %u-bit words, DMA_Desc=%d, "
+           "DMA_Frame=%d, TaskPrio=%d",
+#ifdef CONFIG_I2S_OUTPUT_ROLE_SLAVE
+           "slave",
+#else
+           "master",
+#endif
            (unsigned int)OUTPUT_RATE, (unsigned int)(OUT_WORD_SIZE * 8),
-           I2S_DMA_DESC_NUM, I2S_DMA_FRAME_NUM);
+           I2S_DMA_DESC_NUM, I2S_DMA_FRAME_NUM, AUDIO_PLAYBACK_TASK_PRIORITY);
 
   // MCLK/BCLK/LRCK are now running. Some codecs need this edge to finish their
   // clock setup; amplifiers that manage power from board RTSP events can ignore
@@ -643,6 +703,21 @@ esp_err_t audio_output_write_pcm(const void *data, size_t bytes,
 }
 
 void audio_output_set_sample_rate(uint32_t rate) {
+#ifdef CONFIG_I2S_OUTPUT_ROLE_SLAVE
+  // BCLK and LRCLK are supplied externally. Keep the output rate used by
+  // the resampler and timing engine equal to those fixed external clocks.
+  if (rate != OUTPUT_RATE) {
+    ESP_LOGW(TAG,
+             "Ignoring sample-rate change to %" PRIu32
+             " Hz in I2S slave mode (fixed at %u Hz)",
+             rate, (unsigned int)OUTPUT_RATE);
+  }
+#ifdef CONFIG_SOFTWARE_EQ
+  // A source hand-over still starts the filters from rest, even though
+  // the external clock cannot be retuned.
+  audio_eq_reset();
+#endif
+#else
   // Only safe to call when no writer task is actively using I2S
   // (AirPlay playback task must be stopped, BT calls this before
   // the I2S writer task starts consuming data)
@@ -661,6 +736,7 @@ void audio_output_set_sample_rate(uint32_t rate) {
   output_cursor_reset();
   i2s_channel_enable(tx_handle);
   dac_on_i2s_started(rate);
+#endif
 }
 
 void audio_output_flush(void) {
@@ -676,11 +752,14 @@ void audio_output_set_source_rate(int rate) {
     source_rate = rate;
     resample_reinit_needed = true;
   }
+#ifndef CONFIG_I2S_OUTPUT_ROLE_SLAVE
   // Prefer retuning the clock over resampling: the sinc converter costs more
-  // CPU than an ESP32 has spare beside AAC decode.
+  // CPU than an ESP32 has spare beside AAC decode. A slave must resample
+  // instead, because it cannot retune the external clocks.
   if ((uint32_t)rate != s_output_rate) {
     s_pending_output_rate = (uint32_t)rate;
   }
+#endif
 }
 
 uint32_t audio_output_get_hardware_latency_us(void) {

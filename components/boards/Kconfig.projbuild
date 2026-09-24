@@ -184,6 +184,13 @@ menu "Board Configuration"
         bool
         default y if BOARD_SQUEEZEAMP || BOARD_SQUEEZEAMP_4M
 
+    config I2S_OUTPUT_ROLE_SLAVE
+        bool "External device supplies I2S BCLK/LRCLK"
+        default n
+        help
+            Configure the ESP32 I2S TX channel as a clock slave. The external
+            device must continuously supply BCLK and LRCLK.
+
     menu "Pin Configuration"
         menu "LED GPIOs"
             config LED_STATUS_GPIO
