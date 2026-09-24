@@ -37,12 +37,42 @@ menu "DAC Configuration"
             ESP32-A1S Audio Kit). The board must register it at runtime via
             dac_register().
 
-    config DAC_CONTROLS_VOLUME
-        bool
-        default y if DAC_TAS57XX || DAC_TAS58XX || DAC_ES8311 || DAC_ES8388 || DAC_PCM51XX
+    config DAC_ADAU1701
+        bool "Analog Devices ADAU1701 SigmaDSP"
+        default n
         help
-            Hidden option. Set automatically when a hardware DAC driver is enabled.
-            When true, the DAC handles volume control and software attenuation
-            is skipped in the audio output path.
+            Enable ADAU1701 board support. The I2C control driver is built
+            when CONFIG_DAC_CONTROLS_VOLUME is enabled. The DSP program itself
+            is loaded from the board EEPROM using ADAU1701 self-boot.
+
+    config ADAU1701_VOLUME_PARAM_ADDR
+        int "SigmaStudio volume parameter RAM address"
+        range -1 1023
+        default -1
+        depends on DAC_ADAU1701
+        help
+            Decimal Parameter RAM address exported by SigmaStudio for the
+            volume gain block. The DSP project must use one linked gain
+            parameter for both stereo channels. Set this to -1 when
+            CONFIG_DAC_CONTROLS_VOLUME is disabled.
+
+    config ADAU1701_SELFBOOT_DELAY_MS
+        int "Delay before ESP32 accesses ADAU1701 over I2C (ms)"
+        range 0 1000
+        default 250
+        depends on DAC_ADAU1701 && DAC_CONTROLS_VOLUME
+        help
+            ADAU1701 is I2C master while reading its EEPROM. ESP32 waits this
+            long after board initialization before attaching to the bus.
+
+    config DAC_CONTROLS_VOLUME
+        bool "ADAU1701 handles volume over I2C" if DAC_ADAU1701 && !DAC_TAS57XX && !DAC_TAS58XX && !DAC_ES8311 && !DAC_ES8388 && !DAC_PCM51XX
+        default y if DAC_TAS57XX || DAC_TAS58XX || DAC_ES8311 || DAC_ES8388 || DAC_PCM51XX
+        default n
+        help
+            Select hardware volume control for ADAU1701. Other supported DAC
+            drivers enable this automatically. When true, the DAC handles
+            volume control and software attenuation is skipped in the audio
+            output path.
 
 endmenu
