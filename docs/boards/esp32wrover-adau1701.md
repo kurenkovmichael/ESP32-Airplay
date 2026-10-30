@@ -47,3 +47,24 @@ enabled. Valid addresses are 0 through 1023. The gain block must use standard
 
 The ADAU1701 has the fixed 8-bit I2C address `0x34`. On this board, its physical
 SDA line connects to ESP32 GPIO22 and SCL connects to GPIO21.
+
+## Playback buttons
+
+The `esp32wrover-adau1701` target enables three active-low buttons on the
+`ESP_GPIO_0` connector:
+
+| Connector pin | ESP32 signal | Action |
+| --- | --- | --- |
+| 1 | VCC (3.3 V) | Not used by passive buttons |
+| 2 | GPIO32 | Volume down |
+| 3 | GPIO33 | Volume up |
+| 4 | GPIO25 | Play/pause |
+| 5 | GND | Common button return |
+
+Connect each normally-open button between its GPIO pin and pin 5 (GND). The
+firmware enables the ESP32's internal pull-ups, so no external resistors or VCC
+connection are required. Holding either volume button enables auto-repeat.
+
+This target advertises classic AirPlay v1 so that play/pause is sent back to
+the source through DACP. AirPlay 2 does not provide a DACP session; in that
+mode the same button can only mute and unmute the local audio output.

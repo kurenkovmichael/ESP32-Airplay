@@ -61,3 +61,14 @@ CONFIG_JACK_GPIO=-1
 CONFIG_SPKFAULT_GPIO=-1
 CONFIG_MUTE_GPIO=-1
 CONFIG_DISPLAY_ENABLED=n
+
+# ESP_GPIO_0 front-panel buttons. The inputs are active-low and use the
+# ESP32's internal pull-ups, so each button connects its GPIO pin to pin 5
+# (GND). Pin 1 (VCC) is not needed for passive buttons.
+CONFIG_BTN_PLAY_PAUSE_GPIO=25
+CONFIG_BTN_VOLUME_UP_GPIO=33
+CONFIG_BTN_VOLUME_DOWN_GPIO=32
+
+# AirPlay 2 does not expose a DACP remote session, so the play/pause button can
+# only mute locally. Advertise classic AirPlay v1 for real source-side pause.
+CONFIG_AIRPLAY_FORCE_V1=y
