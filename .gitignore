@@ -1,4 +1,5 @@
 .cache/
+openspec/changes/**/dispatch/
 .claude/
 .pio/
 .venv/
